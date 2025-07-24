@@ -40,18 +40,11 @@ def get_gmail_service():
 
 def get_emails_by_label(service, label_name):
     """Retrieves all unread emails with a specific label."""
-    label_id = None
-    results = service.users().labels().list(userId='me').execute()
-    labels = results.get('labels', [])
-    for label in labels:
-        if label['name'] == label_name:
-            label_id = label['id']
-            break
-    if not label_id:
-        print(f"Label '{label_name}' not found.")
+    if label_name == "Your Label Name":
+        print("Please update the GMAIL_LABEL variable in the script with your actual Gmail label.")
         return []
 
-    query = f"label:{label_id} is:unread"
+    query = f"label:\"{label_name}\" is:unread"
     results = service.users().messages().list(userId='me', q=query).execute()
     return results.get('messages', [])
 

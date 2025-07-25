@@ -9,11 +9,15 @@ from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
 from bs4 import BeautifulSoup
 import requests
+import urllib.parse
+from unidecode import unidecode
+import html
+import difflib
 
 # --- Configuration ---
 # Set your Google API key as an environment variable
-# os.environ['GOOGLE_API_KEY'] = 'YOUR_API_KEY'
-GMAIL_LABEL = "Your Label Name"  # The Gmail label to search for
+os.environ['GOOGLE_API_KEY'] = ''
+GMAIL_LABEL = "Registrations"  # The Gmail label to search for
 REGISTRATIONS_FILE = r"C:\Users\cryst\RHub\Registrations\registrations.json"
 GOOGLE_MASTER_FILE = r"C:\Users\cryst\RHub\Registrations\google_master.json"
 CREDENTIALS_FILE = r"C:\Users\cryst\ETemplates\credentials.json"
@@ -64,6 +68,10 @@ def get_email_body(service, msg_id):
     return ""
 
 
+def remove_macrons(input_string):
+    """Removes macrons from a string."""
+    return unidecode(input_string)
+
 def parse_email(email_body):
     """Parses the HTML email body and extracts the restaurant's information."""
     soup = BeautifulSoup(email_body, 'html.parser')
@@ -73,10 +81,10 @@ def parse_email(email_body):
         if 'EAF2FA' in str(rows[i]):
             key_element = rows[i].find('strong')
             if key_element:
-                key = key_element.get_text().strip()
+                key = remove_macrons(key_element.get_text().strip())
                 value_element = rows[i + 1].find('font')
                 if value_element:
-                    value = value_element.get_text().strip()
+                    value = remove_macrons(value_element.get_text().strip())
                     if key == "Restaurant Website":
                         if " - " in value:
                             parts = value.split(" - ", 1)
@@ -91,25 +99,42 @@ def parse_email(email_body):
 
 
 def get_google_place_details(restaurant_name, address):
-    """Gets details for a restaurant from the Google Places API."""
+    """Gets full details for a restaurant using Google Places API in two steps."""
     api_key = os.environ.get('GOOGLE_API_KEY')
     if not api_key:
         print("Google API key not found. Please set the GOOGLE_API_KEY environment variable.")
         return None
 
-    url = f"https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input={restaurant_name} {address}&inputtype=textquery&fields=place_id,name,formatted_address,international_phone_number,formatted_phone_number,url,website&key={api_key}"
+    encoded_input = urllib.parse.quote(f"{restaurant_name} {address}")
+
+    # Step 1: Find Place
+    find_url = f"https://maps.googleapis.com/maps/api/place/findplacefromtext/json?input={encoded_input}&inputtype=textquery&fields=place_id,name,formatted_address&key={api_key}"
     try:
-        response = requests.get(url)
-        response.raise_for_status()  # Raise an exception for bad status codes
-        data = response.json()
-        if data.get('status') == 'OK' and data.get('candidates'):
-            return data['candidates'][0]
+        find_response = requests.get(find_url)
+        find_response.raise_for_status()
+        find_data = find_response.json()
+
+        if find_data.get('status') == 'OK' and find_data.get('candidates'):
+            place_id = find_data['candidates'][0]['place_id']
+
+            # Step 2: Get Details
+            details_url = f"https://maps.googleapis.com/maps/api/place/details/json?place_id={place_id}&fields=place_id,name,formatted_address,international_phone_number,formatted_phone_number,url,website&key={api_key}"
+            detail_response = requests.get(details_url)
+            detail_response.raise_for_status()
+            detail_data = detail_response.json()
+
+            if detail_data.get('status') == 'OK':
+                return detail_data['result']
+            else:
+                print(f"Place Details error: {detail_data.get('status')}")
+                return None
         else:
-            print(f"Google Places API returned status: {data.get('status')}")
+            print(f"Find Place error: {find_data.get('status')}")
             return None
     except requests.exceptions.RequestException as e:
         print(f"An error occurred with the Google Places API request: {e}")
         return None
+
 
 def append_to_json_file(data, filename):
     """Appends data to a list in a JSON file."""
@@ -118,7 +143,7 @@ def append_to_json_file(data, filename):
 
     file_data = []
     if os.path.exists(filename) and os.path.getsize(filename) > 0:
-        with open(filename, 'r') as f:
+        with open(filename, 'r', encoding='utf-8') as f:
             try:
                 file_data = json.load(f)
             except json.JSONDecodeError:
@@ -131,9 +156,33 @@ def append_to_json_file(data, filename):
 
     file_data.append(data)
 
-    with open(filename, 'w') as f:
-        json.dump(file_data, f, indent=4)
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump(file_data, f, indent=4, ensure_ascii=False)
 
+
+def compare_data(reg_data, google_data):
+    """Compares the registration data and google data and returns True if they are a close match."""
+    if not reg_data or not google_data:
+        return False
+
+    name_match = difflib.SequenceMatcher(None, reg_data.get("Restaurant Name", ""), google_data.get("name", "")).ratio() > 0.8
+    address_match = difflib.SequenceMatcher(None, reg_data.get("Restaurant Address", ""), google_data.get("formatted_address", "")).ratio() > 0.8
+    phone_match = difflib.SequenceMatcher(None, reg_data.get("Restaurant Phone Number", ""), google_data.get("formatted_phone_number", "")).ratio() > 0.8
+    website_match = difflib.SequenceMatcher(None, reg_data.get("Restaurant Website", ""), google_data.get("website", "")).ratio() > 0.8
+
+    return name_match and address_match and phone_match and website_match
+
+def get_label_id(service, label_name):
+    """Retrieves the ID of a label, creating it if it doesn't exist."""
+    labels = service.users().labels().list(userId='me').execute().get('labels', [])
+    for label in labels:
+        if label['name'] == label_name:
+            return label['id']
+    # Label doesn't exist, so create it.
+    label_body = {'name': label_name, 'labelListVisibility': 'labelShow', 'messageListVisibility': 'show'}
+    created_label = service.users().labels().create(userId='me', body=label_body).execute()
+    print(f"Created label: {created_label['name']}")
+    return created_label['id']
 
 def process_emails():
     """
@@ -146,13 +195,26 @@ def process_emails():
     - Marks the email as read.
     """
     service = get_gmail_service()
-    messages = get_emails_by_label(service, GMAIL_LABEL)
+    new_label_name = "Registrations/Complete Registrations"
+    complete_label_id = get_label_id(service, new_label_name)
+    registrations_label_id = get_label_id(service, "Registrations")
+    messages = get_emails_by_label(service, "Registrations")
 
     if not messages:
         print("No unread registration emails found.")
         return
 
     print(f"Found {len(messages)} new registration emails.")
+
+    # Load existing registrations
+    existing_registrations = []
+    if os.path.exists(REGISTRATIONS_FILE) and os.path.getsize(REGISTRATIONS_FILE) > 0:
+        with open(REGISTRATIONS_FILE, 'r', encoding='utf-8') as f:
+            try:
+                existing_registrations = json.load(f)
+            except json.JSONDecodeError:
+                print(f"Warning: Could not decode JSON from {REGISTRATIONS_FILE}. Starting with a new list.")
+                existing_registrations = []
 
     for message in messages:
         msg_id = message['id']
@@ -162,22 +224,119 @@ def process_emails():
             registration_data = parse_email(email_body)
             print(f"Processing registration for: {registration_data.get('Restaurant Name')}")
 
-            # Save registration data
-            append_to_json_file(registration_data, REGISTRATIONS_FILE)
-            print(f"Saved registration data to {REGISTRATIONS_FILE}")
+            # Check for existing entry
+            match_found = False
+            for entry in existing_registrations:
+                if entry.get("Restaurant Name") == registration_data.get("Restaurant Name") and entry.get("Restaurant Address") == registration_data.get("Restaurant Address"):
+                    match_found = True
+                    updated_fields = []
+                    for key, value in registration_data.items():
+                        if entry.get(key) != value:
+                            updated_fields.append(key)
+                            entry[key] = value
 
-            # Get and save Google Places details
-            name = registration_data.get("Restaurant Name")
-            address = registration_data.get("Restaurant Address")
-            if name and address:
-                google_details = get_google_place_details(name, address)
-                if google_details:
-                    append_to_json_file(google_details, GOOGLE_MASTER_FILE)
-                    print(f"Saved Google Places data to {GOOGLE_MASTER_FILE}")
+                    if updated_fields:
+                        print(f"Restaurant {registration_data.get('Restaurant Name')} has already registered. The following information was updated: {', '.join(updated_fields)}")
+                    else:
+                        print(f"Restaurant {registration_data.get('Restaurant Name')} has already registered. No new information to update.")
 
-            # Mark email as read by removing the 'UNREAD' label
-            service.users().messages().modify(userId='me', id=msg_id, body={'removeLabelIds': ['UNREAD']}).execute()
-            print(f"Marked email {msg_id} as read.")
+                    break
+
+            if not match_found:
+                # Get and save Google Places details
+                name = registration_data.get("Restaurant Name")
+                address = registration_data.get("Restaurant Address")
+                if name and address:
+                    google_details = get_google_place_details(name, address)
+                    if google_details:
+                        place_id = google_details.get('place_id')
+                        registration_data['place_id'] = place_id
+                        cleaned_details = {'place_id': place_id}
+                        for key, value in google_details.items():
+                            if isinstance(value, str):
+                                if key == 'name':
+                                    cleaned_details[key] = remove_macrons(value)
+                                else:
+                                    cleaned_details[key] = html.escape(value)
+                            else:
+                                cleaned_details[key] = value
+                        choice = "1"
+                        if not compare_data(registration_data, google_details):
+                            print(f"Data for {registration_data.get('Restaurant Name')} does not match.\n")
+                        
+                            # Show differences field by field
+                            compare_fields = [
+                                ("Restaurant Name", "name"),
+                                ("Restaurant Address", "formatted_address"),
+                                ("Restaurant Phone Number", "formatted_phone_number"),
+                                ("Restaurant Website", "website")
+                            ]
+                            print("Differences found:")
+                            for reg_key, google_key in compare_fields:
+                                reg_val = registration_data.get(reg_key, "")
+                                google_val = google_details.get(google_key, "")
+                                if reg_val != google_val:
+                                    print(f"- {reg_key}:\n    Registration: {reg_val}\n    Google:       {google_val}\n")
+                        
+                            print("1. Use Google version")
+                            print("2. Use Registration version")
+                            choice = input("Please choose which version to use: ")
+
+                        # Save user's choice
+                        choice_file_dir = os.path.join(r"C:\Users\cryst\ETemplates\Completed Templates", registration_data.get("Restaurant Name"))
+                        if not os.path.exists(choice_file_dir):
+                            os.makedirs(choice_file_dir)
+                        choice_file_path = os.path.join(choice_file_dir, f"{registration_data.get('Restaurant Name')}.json")
+                        with open(choice_file_path, 'w', encoding='utf-8') as f:
+                            json.dump({"choice": choice}, f, indent=4)
+
+                        append_to_json_file(google_details, GOOGLE_MASTER_FILE)
+                        print(f"Saved Google Places data to {GOOGLE_MASTER_FILE}")
+
+                        # Create final JSON
+                        # Extract region and zip safely
+                        region_part = ""
+                        zip_code = ""
+                        
+                        if len(google_details.get("formatted_address", "").split(',')) > 2:
+                            region_text = google_details.get("formatted_address").split(',')[2].strip()
+                            parts = region_text.split()
+                            if parts and parts[-1].isdigit():
+                                zip_code = parts[-1]
+                                region_part = " ".join(parts[:-1])
+                            else:
+                                region_part = region_text
+                        
+                        final_data = {
+                            "plac_id": google_details.get("place_id"),
+                            "rName": google_details.get("name"),
+                            "rAddress": google_details.get("formatted_address"),
+                            "rCity": google_details.get("formatted_address").split(',')[1].strip() if len(google_details.get("formatted_address", "").split(',')) > 1 else "",
+                            "rRegion": region_part,
+                            "rZip": zip_code,
+                            "rPhone": google_details.get("formatted_phone_number"),
+                            "rIntPhone": google_details.get("international_phone_number"),
+                            "rEmail": registration_data.get("Restaurant Email"),
+                            "rWebsite": google_details.get("website"),
+                            "rMaps link": google_details.get("url")
+                        }
+
+                        final_file_dir = os.path.join(r"C:\Users\cryst\ETemplates\Completed Templates", registration_data.get("Restaurant Name"))
+                        if not os.path.exists(final_file_dir):
+                            os.makedirs(final_file_dir)
+                        final_file_path = os.path.join(final_file_dir, f"{registration_data.get('Restaurant Name')}.json")
+                        with open(final_file_path, 'w', encoding='utf-8') as f:
+                            json.dump(final_data, f, indent=4, ensure_ascii=False)
+
+                existing_registrations.append(registration_data)
+
+            # Save updated registrations data
+            with open(REGISTRATIONS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(existing_registrations, f, indent=4, ensure_ascii=False)
+
+            # Mark email as read by removing the 'UNREAD' and old labels, and adding the new one
+            service.users().messages().modify(userId='me', id=msg_id, body={'removeLabelIds': ['UNREAD', registrations_label_id], 'addLabelIds': [complete_label_id]}).execute()
+            print(f"Marked email {msg_id} as read and moved to {new_label_name}.")
 
 # --- Main Execution ---
 # This block allows the script to be run directly or imported into a Jupyter notebook.

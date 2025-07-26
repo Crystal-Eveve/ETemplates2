@@ -28,11 +28,13 @@ def create_config_from_json(json_file_path):
     address_town = final_data.get("rCity", "")
     address_region = final_data.get("rRegion", "")
     address_postal_code = final_data.get("rZip", "")
-    website_url = final_data.get("rWebsite", "")
-    website_display_url = urlparse(website_url).netloc if website_url else ""
-    # Strip leading 'www.' for display
-    if website_display_url.startswith("www."):
-    	website_display_url = website_display_url[4:]
+    # normalise website URL (force https, remove trailing slash, strip www from display)
+    website_url = (final_data.get("rWebsite") or "").strip()
+    if website_url and not website_url.startswith(("http://", "https://")):
+        website_url = "https://" + website_url
+    website_url = website_url.replace("http://", "https://").rstrip("/")
+    parsed = urlparse(website_url)
+    website_display_url = parsed.netloc[4:] if parsed.netloc.startswith("www.") else parsed.netloc
     email = final_data.get("rEmail", "")
     google_map_link = final_data.get("rMaps link", "")
     google_map_id = final_data.get("plac_id", "")

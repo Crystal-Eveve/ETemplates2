@@ -28,16 +28,9 @@ def create_config_from_json(json_file_path):
     address_town = final_data.get("rCity", "")
     address_region = final_data.get("rRegion", "")
     address_postal_code = final_data.get("rZip", "")
-    # normalise website URL (force https, remove path and www for display)
-    website_url = (final_data.get("rWebsite") or "").strip()
-    if website_url and not website_url.startswith(("http://", "https://")):
-        website_url = "https://" + website_url
-    website_url = website_url.replace("http://", "https://").rstrip("/")
+    website_url = final_data.get("rWebsite", "")
     parsed = urlparse(website_url)
-    # Rebuild root URL (scheme + netloc, no path/query)
-    root_url = f"{parsed.scheme}://{parsed.netloc}" if parsed.netloc else website_url
     website_display_url = parsed.netloc[4:] if parsed.netloc.startswith("www.") else parsed.netloc
-    website_url = root_url
     email = final_data.get("rEmail", "")
     google_map_link = final_data.get("rMaps link", "")
     google_map_id = final_data.get("plac_id", "")

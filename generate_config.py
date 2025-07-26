@@ -38,6 +38,10 @@ def create_config_from_json(json_file_path):
     link_phone = final_data.get("rIntPhone", "").replace(" ", "").replace("-", "")
     if not link_phone.startswith("tel:"):
         link_phone = f"tel:{link_phone}"
+    # New fields for social links
+    social_facebook = final_data.get("socialFacebook", "")
+    social_instagram = final_data.get("socialInstagram", "")
+    social_tripadvisor = final_data.get("socialTripadvisor", "")
 
 
     # --- Region Mapping ---
@@ -88,9 +92,9 @@ $websiteDisplayURL = '{website_display_url}';//restauranthub.co.nz
 $email = "{email}";
 $googleMapLink = "{google_map_link}"; //USE FULL LINK to avoid redirection
 $googleMapId ="{google_map_id}";// https://developers.google.com/maps/documentation/places/web-service/place-id
-$socialFacebook = "";
-$socialInstagram = ""; // no trailing forward slashhttps://www.instagram.com/restauranthub_nz
-$socialTripadvisor = ""; // if no TA or fb or Insta then use blank string
+$socialFacebook = "{social_facebook}";
+$socialInstagram = "{social_instagram}";
+$socialTripadvisor = "{social_tripadvisor}";
 $TripAdvisorReview = "";
 //Review link for post dining email relpace TA social link Restaurant_Review after the .com/ with UserReviewEdit
 $postDiningLinkName = "TripAdvisor review page";
